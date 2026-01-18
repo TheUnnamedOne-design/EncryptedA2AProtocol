@@ -1,0 +1,4 @@
+flask
+flask-cors
+dotenv
+threading
