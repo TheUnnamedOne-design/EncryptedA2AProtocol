@@ -150,3 +150,29 @@ Thumbs.db
 # Project specific
 *.db
 *.sqlite
+
+# Cryptographic Materials (SENSITIVE)
+*.pem
+*.key
+*.crt
+*.cert
+*.der
+*.p12
+*.pfx
+*_private*
+*private_key*
+*controller_key*
+agent_cards/
+certificates/
+keys/
+secrets/
+
+# Session & Token Files
+*.token
+*.session
+agent_db.json
+controller_keys.json
+
+# Agent Runtime Data
+agent_state.json
+*.pickle

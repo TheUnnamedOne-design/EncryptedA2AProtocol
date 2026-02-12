@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 
 from routes.health import health_bp
+from routes.verify_validate_agent import verify_bp
+
 
 load_dotenv()
 
@@ -12,6 +14,7 @@ app=Flask(__name__)
 CORS(app)
 
 app.register_blueprint(health_bp)
+app.register_blueprint(verify_bp, url_prefix='/verify')
 
 @app.route('/',methods=['GET'])
 def home():
