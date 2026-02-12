@@ -12,7 +12,7 @@ This project implements a secure Agent-to-Agent (A2A) communication protocol ins
 
 - **Secure Agent Discovery**: Implement cryptographically protected agent discovery using Agent Cards with identity verification and capability advertisement
 - **Encrypted Three-Way Handshake**: Establish authenticated sessions with nonce-based challenge-response validation before communication
-- **REST-Based Distributed Architecture**: Each agent operates as an independent service with unique network identity (separate HTTP endpoints)
+- **REST-Based Distributed Architecture**: Each agent operates as an independent service with unique network identity (separate HTTPS endpoints)
 - **Coordinated Maze Solving**: Demonstrate secure agent coordination through a dynamic maze-solving environment with real-time state synchronization
 - **Modular & Extensible Design**: Foundation for future autonomous decision-making, adversarial network simulation, and adaptive encryption strategies
 
@@ -361,18 +361,18 @@ EncryptedA2AProtocol/
 
 ```bash
 # Test server health
-curl http://localhost:5000/health
+curl https://localhost:5000/health
 
 # Test agent registration
-curl -X POST http://localhost:5000/agent/register \
+curl -X POST https://localhost:5000/agent/register \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":"test_agent","address":"http://localhost:5003"}'
+  -d '{"agent_id":"test_agent","address":"https://localhost:5003"}'
 
 # Test agent discovery
-curl http://localhost:5000/agents/list
+curl https://localhost:5000/agents/list
 
 # Test direct agent communication
-curl -X POST http://localhost:5001/message \
+curl -X POST https://localhost:5001/message \
   -H "Content-Type: application/json" \
   -d '{"from":"traveller_1","message":"Hello Helper!"}'
 ```

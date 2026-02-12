@@ -1,6 +1,8 @@
 import time
 import json
 import base64
+import requests
+import secrets
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -97,3 +99,44 @@ class TravellerAgent:
         )
 
         return base64.b64encode(signature).decode()
+
+    # -----------------------------------
+    # Register with Controller
+    # -----------------------------------
+    def register_with_controller(self, controller_address):
+        """
+        Send registration request to controller
+        Returns: (success: bool, response_data: dict or error_message: str)
+        """
+        try:
+            # Sign the agent card
+            agent_signature = self.sign_agent_card()
+            
+            # Generate cryptographic nonce for replay attack prevention
+            nonce = secrets.token_hex(32)  # 256-bit random nonce
+            
+            # Prepare enhanced registration payload
+            registration_payload = {
+                "registration_version": 1,
+                "agent_card": self.agent_card,
+                "agent_signature": agent_signature,
+                "nonce": nonce,
+                "timestamp": int(time.time())  # Additional freshness indicator
+            }
+            
+            # Send registration request to controller
+            response = requests.post(
+                f"{controller_address}/verify/register",
+                json=registration_payload,
+                verify=False  # For self-signed certificates
+            )
+            
+            if response.status_code == 200:
+                return True, response.json()
+            else:
+                return False, f"Status {response.status_code}: {response.text}"
+                
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to controller at {controller_address}"
+        except Exception as e:
+            return False, f"Registration error: {str(e)}"

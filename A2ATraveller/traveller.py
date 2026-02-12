@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import threading
+from routes.register_agent import TravellerAgent
 
 load_dotenv()
 
@@ -12,6 +13,10 @@ CORS(app)
 # Get port from .env
 PORT = int(os.getenv("PORT", 5002))
 AGENT_ID = os.getenv("AGENT_ID", "traveller_1")
+CONTROLLER_ADDRESS = os.getenv("CONTROLLER_ADDRESS", "https://localhost:5000")
+
+# Initialize agent
+agent = TravellerAgent()
 
 @app.route('/', methods=['GET'])
 def home():
@@ -51,9 +56,20 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | exit")
+            print("Commands: help | status | register | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
+        elif cmd == "register":
+            print(f"Registering agent with controller at {CONTROLLER_ADDRESS}...")
+            success, result = agent.register_with_controller(CONTROLLER_ADDRESS)
+            
+            if success:
+                print("✓ Registration successful!")
+                print(f"Certificate received from controller")
+                print(f"Agent ID: {result['agent_card']['agent_id']}")
+                print(f"Controller signature: {result['controller_signature'][:50]}...")
+            else:
+                print(f"✗ Registration failed: {result}")
         elif cmd == "exit":
             print("Shutting down...")
             break
