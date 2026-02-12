@@ -56,9 +56,19 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | register | exit")
+            print("Commands: help | status | trust | register | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
+            trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
+            print(f"Trust Anchor: {trust_status}")
+        elif cmd == "trust":
+            print(f"Establishing trust with controller at {CONTROLLER_ADDRESS}...")
+            success, message = agent.download_controller_public_key(CONTROLLER_ADDRESS)
+            
+            if success:
+                print(f"✓ {message}")
+            else:
+                print(f"✗ {message}")
         elif cmd == "register":
             print(f"Registering agent with controller at {CONTROLLER_ADDRESS}...")
             success, result = agent.register_with_controller(CONTROLLER_ADDRESS)

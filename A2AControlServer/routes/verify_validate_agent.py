@@ -134,3 +134,50 @@ def register():
 @verify_bp.route("/cards", methods=["GET"])
 def get_cards():
     return jsonify(agent_db)
+
+
+
+@verify_bp.route("/public-key", methods=["GET"])
+def get_public_key():
+    """
+    Expose controller's public key for agents to download.
+    Agents use this to verify controller signatures on certificates.
+    """
+    # Export controller public key as PEM
+    controller_public_pem = controller_public.public_bytes(
+        Encoding.PEM,
+        PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    
+    # Also provide escaped version for easy .env file usage
+    controller_public_pem_escaped = controller_public_pem.replace("\n", "\\n")
+    
+    return jsonify({
+        "key_id": "controller_001",
+        "public_key": controller_public_pem,
+        "public_key_oneline": controller_public_pem_escaped,
+        "issued_at": int(time.time())
+    })
+
+
+@verify_bp.route("/reset", methods=["POST"])
+def reset_database():
+    """
+    Clear all registered agents and nonces.
+    Useful for development/testing - allows re-registration without server restart.
+    """
+    global agent_db, used_nonces
+    
+    agent_count = len(agent_db)
+    nonce_count = len(used_nonces)
+    
+    agent_db.clear()
+    used_nonces.clear()
+    
+    return jsonify({
+        "status": "success",
+        "message": "Agent database reset",
+        "cleared_agents": agent_count,
+        "cleared_nonces": nonce_count,
+        "timestamp": int(time.time())
+    }), 200

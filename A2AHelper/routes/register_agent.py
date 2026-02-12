@@ -13,24 +13,24 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 
-class TravellerAgent:
+class HelperAgent:
 
     def __init__(self):
 
         # -----------------------------
         # Core Identity
         # -----------------------------
-        self.name = "Traveller Agent"
-        self.agent_id = "traveller_agent_001"
+        self.name = "Helper Agent"
+        self.agent_id = "helper_agent_001"
 
         # -----------------------------
         # Functional Description
         # -----------------------------
-        self.methods = ["send_request", "receive_response"]
+        self.methods = ["assist_request", "provide_support"]
 
         self.method_descriptions = {
-            "send_request": "Sends a request to another agent.",
-            "receive_response": "Handles the response received from another agent."
+            "assist_request": "Assists with processing requests from other agents.",
+            "provide_support": "Provides support services to other agents."
         }
 
         # -----------------------------
