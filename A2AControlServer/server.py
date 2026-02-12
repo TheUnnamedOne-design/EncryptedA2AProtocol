@@ -13,6 +13,8 @@ load_dotenv()
 app=Flask(__name__)
 CORS(app)
 
+PORT = int(os.getenv("PORT", 5000))
+
 app.register_blueprint(health_bp)
 app.register_blueprint(verify_bp, url_prefix='/verify')
 
@@ -21,6 +23,11 @@ def home():
     return "Welcome to the A2A Protocol Server"
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    print(f"Starting server at http://localhost:{port}")
-    app.run(host='0.0.0.0',port=port,debug=True)
+    print(f"Starting server at https://localhost:{PORT}")
+    app.run(
+        host='0.0.0.0',
+        port=PORT,
+        debug=False,
+        use_reloader=False,
+        ssl_context=("cert.pem", "key.pem")  
+    )
