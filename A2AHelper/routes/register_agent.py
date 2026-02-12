@@ -152,6 +152,75 @@ class HelperAgent:
             return False, f"Error loading controller public key: {str(e)}"
 
     # -----------------------------------
+    # Verify Controller Certificate
+    # -----------------------------------
+    def verify_controller_certificate(self, certificate):
+        """
+        Verify controller's signature on the certificate.
+        This establishes that the certificate was issued by the trusted controller.
+        
+        Args:
+            certificate: Dict containing agent_card, agent_signature, controller_signature
+            
+        Returns:
+            (success: bool, message: str)
+        """
+        print("\n[DEBUG] ═══════════════════════════════════════════════════")
+        print("[DEBUG] Starting Controller Signature Verification")
+        print("[DEBUG] ═══════════════════════════════════════════════════")
+        
+        # Step 1: Check if controller public key is loaded
+        if not self.controller_public_key:
+            print("[DEBUG] ❌ No controller public key found")
+            print("[DEBUG] Run 'trust' command first to establish trust anchor\n")
+            return False, "Controller public key not loaded - run 'trust' command first"
+        
+        print("[DEBUG] ✓ Controller public key is loaded")
+        
+        try:
+            agent_card = certificate["agent_card"]
+            controller_signature = certificate["controller_signature"]
+            
+            print(f"[DEBUG] Agent ID in certificate: {agent_card.get('agent_id')}")
+            print(f"[DEBUG] Certificate issued at: {certificate.get('certificate_issued_at')}")
+            print(f"[DEBUG] Certificate expires at: {certificate.get('certificate_expires_at')}")
+            print(f"[DEBUG] Controller signature (first 50 chars): {controller_signature[:50]}...")
+            
+            # Step 2: Serialize agent_card using canonical JSON
+            data_bytes = self.canonical_json(agent_card)
+            print(f"[DEBUG] Canonical JSON size: {len(data_bytes)} bytes")
+            print(f"[DEBUG] Canonical JSON hash: {hash(data_bytes)}")
+            
+            # Step 3: Verify controller's signature
+            print("[DEBUG] Verifying controller's RSA-PSS signature...")
+            
+            self.controller_public_key.verify(
+                base64.b64decode(controller_signature),
+                data_bytes,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            
+            print("[DEBUG] ✓ Cryptographic verification PASSED")
+            print("[DEBUG] ✓ Controller signature is valid")
+            print("[DEBUG] ✓ Certificate authenticity confirmed")
+            print("[DEBUG] ✓ Issued by trusted controller")
+            print("[DEBUG] ═══════════════════════════════════════════════════")
+            print("[DEBUG] Bidirectional Trust Established (Agent ↔ Controller)")
+            print("[DEBUG] ═══════════════════════════════════════════════════\n")
+            
+            return True, "Controller signature verified successfully"
+            
+        except Exception as e:
+            print(f"[DEBUG] ❌ Signature verification FAILED")
+            print(f"[DEBUG] Error: {str(e)}")
+            print("[DEBUG] ═══════════════════════════════════════════════════\n")
+            return False, f"Controller signature verification failed: {str(e)}"
+
+    # -----------------------------------
     # Register with Controller
     # -----------------------------------
     def register_with_controller(self, controller_address):
@@ -183,7 +252,22 @@ class HelperAgent:
             )
             
             if response.status_code == 200:
-                return True, response.json()
+                certificate = response.json()
+                print(f"[INFO] Certificate received from controller")
+                
+                # Verify controller's signature on certificate
+                verified, verify_msg = self.verify_controller_certificate(certificate)
+                
+                # Add verification result to response
+                certificate["controller_verified"] = verified
+                certificate["controller_verify_message"] = verify_msg
+                
+                if verified:
+                    print(f"[INFO] ✓ {verify_msg}")
+                else:
+                    print(f"[WARNING] ✗ {verify_msg}")
+                
+                return True, certificate
             else:
                 return False, f"Status {response.status_code}: {response.text}"
                 
