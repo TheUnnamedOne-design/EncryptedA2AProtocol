@@ -1,5 +1,5 @@
 flask
 flask-cors
-dotenv
-threading
-urllib3
+python-dotenv
+cryptography
+requests
