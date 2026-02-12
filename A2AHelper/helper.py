@@ -62,11 +62,36 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | trust | register | cards | exit")
+            print("Commands: help | status | setup | trust | register | cards | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
             print(f"Trust Anchor: {trust_status}")
+        elif cmd == "setup":
+            print(f"Setting up agent with controller at {CONTROLLER_ADDRESS}...\n")
+            
+            # Step 1: Establish trust
+            print("[1/2] Establishing trust...")
+            success, message = agent.download_controller_public_key(CONTROLLER_ADDRESS)
+            if success:
+                print(f"✓ {message}\n")
+            else:
+                print(f"✗ {message}")
+                print("Setup failed at trust establishment step.")
+                continue
+            
+            # Step 2: Register
+            print("[2/2] Registering with controller...")
+            success, result = agent.register_with_controller(CONTROLLER_ADDRESS)
+            if success:
+                print("✓ Registration successful!")
+                print(f"Certificate received from controller")
+                print(f"Agent ID: {result['agent_card']['agent_id']}")
+                print(f"Controller signature: {result['controller_signature'][:50]}...\n")
+                print("✅ Setup complete! Agent is ready.")
+            else:
+                print(f"✗ Registration failed: {result}")
+                print("Setup failed at registration step.")
         elif cmd == "trust":
             print(f"Establishing trust with controller at {CONTROLLER_ADDRESS}...")
             success, message = agent.download_controller_public_key(CONTROLLER_ADDRESS)
