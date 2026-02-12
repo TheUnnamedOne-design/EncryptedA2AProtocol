@@ -1,6 +1,7 @@
 import time
 import json
 import base64
+from urllib import response
 import requests
 import secrets
 
@@ -275,3 +276,79 @@ class TravellerAgent:
             return False, f"Cannot connect to controller at {controller_address}"
         except Exception as e:
             return False, f"Registration error: {str(e)}"
+        
+    
+
+
+    def get_all_agent_cards(self, controller_address): 
+        """
+        Retrieve all registered agent cards from the controller.
+        
+        Args:
+            controller_address: Base URL of controller (e.g., "https://127.0.0.1:5000")
+            
+        Returns:
+            (success: bool, agent_cards: dict or error_message: str)
+        """
+        try:
+            print(f"[INFO] Fetching registered agent cards from {controller_address}...")
+            
+            response = requests.get(
+                f"{controller_address}/verify/cards",
+                verify=False  # For self-signed certificates
+            )
+
+            if response.status_code == 200:
+                agent_cards = response.json()
+                
+                if not agent_cards:
+                    print("[INFO] No agents registered yet")
+                    return True, {}
+                
+                print(f"[INFO] ✓ Retrieved {len(agent_cards)} registered agent(s)\n")
+                print("=" * 70)
+                print("REGISTERED AGENTS")
+                print("=" * 70)
+                
+                for agent_id, certificate in agent_cards.items():
+                    agent_card = certificate.get("agent_card", {})
+                    
+                    print(f"\nAgent ID: {agent_id}")
+                    print(f"  Name: {agent_card.get('name', 'N/A')}")
+                    print(f"  Methods: {', '.join(agent_card.get('methods', []))}")
+                    print(f"  Protocol Version: {agent_card.get('protocol_version', 'N/A')}")
+                    print(f"  Card Issued: {agent_card.get('issued_at', 'N/A')}")
+                    print(f"  Card Expires: {agent_card.get('expires_at', 'N/A')}")
+                    print(f"  Certificate Issued: {certificate.get('certificate_issued_at', 'N/A')}")
+                    print(f"  Certificate Expires: {certificate.get('certificate_expires_at', 'N/A')}")
+                    print(f"  Has Controller Signature: {'✓' if certificate.get('controller_signature') else '✗'}")
+                    print(f"  Has Agent Signature: {'✓' if certificate.get('agent_signature') else '✗'}")
+                
+                print("\n" + "=" * 70)
+                
+                return True, agent_cards
+            else:
+                error_msg = f"Failed to fetch agent cards: HTTP {response.status_code}"
+                print(f"[ERROR] {error_msg}")
+                try:
+                    error_detail = response.json().get('error', response.text)
+                    print(f"[ERROR] Details: {error_detail}")
+                except:
+                    pass
+                return False, error_msg
+
+        except requests.exceptions.ConnectionError:
+            error_msg = f"Cannot connect to controller at {controller_address}"
+            print(f"[ERROR] {error_msg}")
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error retrieving agent cards: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            return False, error_msg
+        
+
+    
+
+        
+
+    

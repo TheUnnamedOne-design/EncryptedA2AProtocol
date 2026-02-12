@@ -2,3 +2,4 @@ flask
 flask-cors
 dotenv
 threading
+urllib3

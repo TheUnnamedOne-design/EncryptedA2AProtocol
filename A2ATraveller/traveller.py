@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import threading
-from routes.register_agent import TravellerAgent
+from routes.traveller_agent import TravellerAgent
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | trust | register | exit")
+            print("Commands: help | status | trust | register | cards | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
@@ -80,6 +80,10 @@ if __name__ == "__main__":
                 print(f"Controller signature: {result['controller_signature'][:50]}...")
             else:
                 print(f"✗ Registration failed: {result}")
+        elif cmd == "cards":
+            success, result = agent.get_all_agent_cards(CONTROLLER_ADDRESS)
+            if not success:
+                print(f"✗ Failed to retrieve cards: {result}")
         elif cmd == "exit":
             print("Shutting down...")
             break
