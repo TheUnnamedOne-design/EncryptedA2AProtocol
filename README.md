@@ -564,46 +564,50 @@ Invoke-RestMethod -Uri https://localhost:5000/verify/cards -SkipCertificateCheck
 
 ---
 
-## 🎯 Use Case: Maze Coordination
-
-The system demonstrates secure agent coordination through a maze-solving scenario:
-
-1. **Agent Registration**: Both agents register capabilities with central server
-2. **Discovery**: Agents discover each other's maze-solving capabilities
-3. **Handshake**: Establish secure authenticated session
-4. **Coordination**: 
-   - Helper agent performs pathfinding and shares route information
-   - Traveller agent executes navigation and reports position updates
-   - Agents coordinate to avoid collisions and optimize exploration
-5. **Visualization**: Real-time display of agent positions and maze state
-
----
-
 ## 📂 Project Structure
 
 ```
 EncryptedA2AProtocol/
-├── A2AControlServer/          # Central coordinator (Port 5000)
+├── A2AControlServer/              # Controller (CA) - Port 5000
 │   ├── venv/
 │   ├── routes/
+│   │   ├── __init__.py
 │   │   ├── health.py
-│   │   └── __init__.py
-│   ├── agents/
-│   ├── server.py
-│   ├── requirements.txt
-│   └── .env
-├── A2AHelper/                 # Helper agent (Port 5001)
+│   │   └── verify_validate_agent.py    # Registration & validation logic
+│   ├── server.py                        # Flask application
+│   ├── cert.pem, key.pem                # SSL certificates
+│   ├── .env                             # Configuration
+│   └── requirements.txt
+│
+├── A2ATraveller/                  # Traveller Agent - Port 5002
 │   ├── venv/
-│   ├── helper.py
-│   ├── requirements.txt
-│   └── .env
-├── A2ATraveller/              # Traveller agent (Port 5002)
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   └── register_agent.py            # TravellerAgent class
+│   ├── traveller.py                     # CLI + Flask app
+│   ├── cert.pem, key.pem
+│   ├── .env
+│   └── requirements.txt
+│
+├── A2AHelper/                     # Helper Agent - Port 5001
 │   ├── venv/
-│   ├── traveller.py
-│   ├── requirements.txt
-│   └── .env
-├── start_all.bat              # Automated launcher
-├── README.md
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   └── register_agent.py            # HelperAgent class
+│   ├── helper.py                        # CLI + Flask app
+│   ├── cert.pem, key.pem
+│   ├── .env
+│   └── requirements.txt
+│
+├── documentation/                 # Comprehensive protocol documentation
+│   ├── README.md                        # Documentation index
+│   ├── PHASE_1_REGISTRATION_AND_TRUST.md     # ✅ Implemented
+│   ├── PHASE_2_AGENT_DISCOVERY.md            # 🔄 Design complete
+│   └── PHASE_3_SECURE_COMMUNICATION.md       # 🔄 Design complete
+│
+├── Illustrations/                 # Architecture diagrams
+├── README.md                      # This file - Project overview
+├── start_all.bat                  # Automated launcher (Windows)
 └── .gitignore
 ```
 
