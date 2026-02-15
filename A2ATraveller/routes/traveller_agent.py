@@ -4,6 +4,7 @@ import base64
 from urllib import response
 import requests
 import secrets
+import queue
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -12,6 +13,8 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
     load_pem_public_key
 )
+
+from .session_manager import SessionState
 
 
 class TravellerAgent:
@@ -59,6 +62,12 @@ class TravellerAgent:
         # -----------------------------
         self.my_certificate = None  # Stores certificate issued by controller
         self.peer_certificates = {}  # {agent_id: certificate_data}
+
+        # -----------------------------
+        # Session Management
+        # -----------------------------
+        self.active_sessions = {}  # {session_id: SessionState}
+        self.pending_requests = queue.Queue()  # Thread-safe queue for incoming requests
 
         # -----------------------------
         # Timestamps
