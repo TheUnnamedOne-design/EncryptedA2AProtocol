@@ -218,7 +218,7 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | setup | trust | register | cards | exit")
+            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
@@ -271,6 +271,69 @@ if __name__ == "__main__":
             success, result = agent.get_all_agent_cards(CONTROLLER_ADDRESS)
             if not success:
                 print(f"✗ Failed to retrieve cards: {result}")
+        elif cmd == "info":
+            print(f"\n{'='*60}")
+            print(f"Agent Information")
+            print(f"{'='*60}")
+            print(f"Agent ID: {agent.agent_id}")
+            print(f"Port: {PORT}")
+            print(f"Status: Active")
+            
+            if agent.controller_public_key:
+                print(f"Trust Anchor: ✓ Established (Controller: controller_001)")
+            else:
+                print(f"Trust Anchor: ✗ Not established")
+            
+            if agent.my_certificate:
+                cert = agent.my_certificate
+                print(f"\nCertificate Status: ✓ Registered")
+                print(f"  Issued: {cert.get('certificate_issued_at', 'N/A')}")
+                print(f"  Expires: {cert.get('certificate_expires_at', 'N/A')}")
+                print(f"  Methods: {', '.join(cert.get('agent_card', {}).get('methods', []))}")
+            else:
+                print(f"\nCertificate Status: ✗ Not registered")
+            
+            print(f"\nActive Sessions: {len(agent.active_sessions)}")
+            print(f"Peer Certificates Cached: {len(agent.peer_certificates)}")
+            print(f"{'='*60}\n")
+        elif cmd == "sessions":
+            if not agent.active_sessions:
+                print("No active sessions.")
+            else:
+                print(f"\n{'='*60}")
+                print(f"Active Sessions ({len(agent.active_sessions)})")
+                print(f"{'='*60}")
+                for session_id, session in agent.active_sessions.items():
+                    print(f"\nSession ID: {session_id}")
+                    print(f"  Peer: {session.peer_agent_id}")
+                    print(f"  Address: {session.peer_address}")
+                    print(f"  Status: {'Active' if session.is_active else 'Inactive'}")
+                    print(f"  Created: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(session.created_at))}")
+                    print(f"  AES Key: {'Established' if session.aes_key else 'Pending'}")
+                print(f"{'='*60}\n")
+        elif cmd == "request":
+            if not agent.my_certificate:
+                print("✗ Agent not registered. Run 'setup' first.")
+                continue
+            
+            print("\nSend Communication Request")
+            print("="*60)
+            peer_address = input("Enter peer agent address (e.g., https://localhost:5002): ").strip()
+            peer_agent_id = input("Enter peer agent ID (e.g., traveller_agent_001): ").strip()
+            
+            if not peer_address or not peer_agent_id:
+                print("✗ Both address and agent ID are required.")
+                continue
+            
+            print(f"\nSending communication request to {peer_agent_id}...")
+            success, result = agent.send_communication_request(peer_address, peer_agent_id)
+            
+            if success:
+                print(f"✓ Communication request accepted!")
+                print(f"Session ID: {result}")
+                print(f"\nSession created. Use 'sessions' to view details.")
+            else:
+                print(f"✗ Communication request failed: {result}")
         elif cmd == "exit":
             print("Shutting down...")
             break

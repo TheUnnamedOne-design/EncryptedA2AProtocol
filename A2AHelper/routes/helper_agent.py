@@ -582,7 +582,16 @@ class HelperAgent:
                 except Exception as e:
                     return False, f"Response signature verification failed: {e}"
                 
+                # Create session on requester side
+                session = SessionState(
+                    session_id=session_id,
+                    peer_agent_id=peer_agent_id,
+                    peer_address=peer_address
+                )
+                self.active_sessions[session_id] = session
+                
                 print(f"[INFO] ✓ Request accepted! Session ID: {session_id}")
+                print(f"[INFO] ✓ Session created on requester side")
                 return True, session_id
                 
             else:
