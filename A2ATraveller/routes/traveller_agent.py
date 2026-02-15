@@ -19,13 +19,14 @@ from .session_manager import SessionState
 
 class TravellerAgent:
 
-    def __init__(self):
+    def __init__(self, my_address="https://localhost:5002"):
 
         # -----------------------------
         # Core Identity
         # -----------------------------
         self.name = "Traveller Agent"
         self.agent_id = "traveller_agent_001"
+        self.my_address = my_address
 
         # -----------------------------
         # Functional Description
@@ -508,6 +509,7 @@ class TravellerAgent:
             request_payload = {
                 "request_id": request_id,
                 "agent_id": self.agent_id,
+                "address": self.my_address,
                 "timestamp": timestamp
             }
             
@@ -609,3 +611,126 @@ class TravellerAgent:
             return False, f"Cannot connect to peer at {peer_address}"
         except Exception as e:
             return False, f"Error sending request: {str(e)}"
+    
+    
+    def perform_key_exchange(self, session_id, peer_address):
+        """
+        Perform authenticated Diffie-Hellman key exchange with a peer.
+        
+        This establishes a shared AES-256 key for encrypted communication.
+        The DH public keys are signed with RSA keys to prevent MITM attacks.
+        
+        Args:
+            session_id (str): Session ID from communication request
+            peer_address (str): HTTPS address of peer agent
+            
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        from routes.crypto_utils import (
+            generate_dh_parameters,
+            generate_dh_keypair,
+            sign_dh_public_key,
+            verify_signed_dh_key,
+            derive_aes_key,
+            serialize_dh_public_key,
+            deserialize_dh_public_key
+        )
+        from cryptography.hazmat.primitives.serialization import load_pem_public_key
+        
+        try:
+            print(f"\n[KEY EXCHANGE] Starting for session: {session_id}")
+            
+            # Verify session exists
+            if session_id not in self.active_sessions:
+                return False, "Session not found"
+            
+            session = self.active_sessions[session_id]
+            
+            # Verify we have peer's certificate
+            if session.peer_agent_id not in self.peer_certificates:
+                return False, "Peer certificate not found"
+            
+            # Generate DH parameters and keypair
+            print(f"[KEY EXCHANGE] [1/4] Generating DH parameters...")
+            dh_parameters = generate_dh_parameters()
+            
+            print(f"[KEY EXCHANGE] [2/4] Generating DH keypair...")
+            dh_private, dh_public = generate_dh_keypair(dh_parameters)
+            
+            # Serialize and sign our DH public key
+            dh_public_bytes = serialize_dh_public_key(dh_public)
+            signature = sign_dh_public_key(dh_public, self.private_key)
+            
+            # Create request payload
+            request_payload = {
+                "session_id": session_id,
+                "dh_public": base64.b64encode(dh_public_bytes).decode(),
+                "timestamp": int(time.time()),
+                "signature": base64.b64encode(signature).decode()
+            }
+            
+            # Send key exchange request
+            print(f"[KEY EXCHANGE] [3/4] Sending DH public key to peer...")
+            response = requests.post(
+                f"{peer_address}/agent/communicate/keyexchange",
+                json=request_payload,
+                verify=False,
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                error_detail = response.json().get('error', response.text) if response.text else "Unknown error"
+                return False, f"Key exchange failed: {error_detail}"
+            
+            response_data = response.json()
+            
+            # Extract peer's DH public key and signature
+            peer_dh_public_b64 = response_data.get('dh_public')
+            peer_signature_b64 = response_data.get('signature')
+            
+            if not peer_dh_public_b64 or not peer_signature_b64:
+                return False, "Invalid response format from peer"
+            
+            # Decode peer's data
+            peer_dh_public_bytes = base64.b64decode(peer_dh_public_b64)
+            peer_signature = base64.b64decode(peer_signature_b64)
+            
+            # Get peer's RSA public key for verification
+            peer_cert = self.peer_certificates[session.peer_agent_id]
+            peer_public_key_pem = peer_cert['agent_card']['public_key']
+            peer_public_key = load_pem_public_key(peer_public_key_pem.encode())
+            
+            # Verify peer's DH public key signature
+            if not verify_signed_dh_key(peer_dh_public_bytes, peer_signature, peer_public_key):
+                return False, "Peer's DH signature verification failed"
+            
+            print(f"[KEY EXCHANGE] ✓ Peer's DH signature verified")
+            
+            # Deserialize peer's DH public key
+            peer_dh_public = deserialize_dh_public_key(peer_dh_public_bytes)
+            
+            # Compute shared secret
+            print(f"[KEY EXCHANGE] [4/4] Computing shared secret...")
+            shared_secret = dh_private.exchange(peer_dh_public)
+            
+            # Derive AES key from shared secret
+            aes_key = derive_aes_key(shared_secret)
+            
+            # Store AES key in session
+            session.aes_key = aes_key
+            
+            print(f"[KEY EXCHANGE] ✓ AES-256 key established")
+            print(f"[KEY EXCHANGE] ✓ Secure channel ready for session: {session_id}\n")
+            
+            return True, "Key exchange successful"
+            
+        except requests.exceptions.Timeout:
+            return False, "Key exchange timed out"
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to peer at {peer_address}"
+        except Exception as e:
+            print(f"[ERROR] Key exchange failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, f"Key exchange error: {str(e)}"

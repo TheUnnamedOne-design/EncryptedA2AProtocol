@@ -19,8 +19,8 @@ PORT = int(os.getenv("PORT", 5002))
 AGENT_ID = os.getenv("AGENT_ID", "traveller_1")
 CONTROLLER_ADDRESS = os.getenv("CONTROLLER_ADDRESS", "https://localhost:5000")
 
-# Initialize agent
-agent = TravellerAgent()
+# Initialize agent with address
+agent = TravellerAgent(my_address=f"https://localhost:{PORT}")
 
 @app.route('/', methods=['GET'])
 def home():
@@ -67,10 +67,11 @@ def handle_communication_request():
         # Extract request data
         request_id = data.get('request_id')
         requester_agent_id = data.get('agent_id')
+        requester_address = data.get('address')
         timestamp = data.get('timestamp')
         signature = data.get('signature')
         
-        if not all([request_id, requester_agent_id, timestamp, signature]):
+        if not all([request_id, requester_agent_id, requester_address, timestamp, signature]):
             return jsonify({"error": "Missing required fields"}), 400
         
         print(f"\n[INCOMING] Communication request from {requester_agent_id}")
@@ -82,20 +83,17 @@ def handle_communication_request():
         
         # Fetch requester's certificate from controller if not cached
         if requester_agent_id not in agent.peer_certificates:
-            # Try to fetch from peer first
-            requester_address = request.remote_addr
-            # Note: We don't know the exact port, so we'll fetch from controller
-            print(f"[INFO] Fetching {requester_agent_id}'s certificate...")
-            
-            # For now, we'll need the certificate to be fetched via controller
-            # In production, peer address would be in the request
-            # Let's assume we can construct it or it's provided
-            # For this implementation, we'll skip cert fetch and use what's in request
-            pass
+            print(f"[INFO] Fetching {requester_agent_id}'s certificate from {requester_address}...")
+            success, cert_or_error = agent.fetch_peer_certificate(requester_address)
+            if not success:
+                return jsonify({"error": f"Failed to fetch certificate: {cert_or_error}"}), 400
+            # Verify the fetched certificate is for the expected agent
+            fetched_agent_id = cert_or_error.get('agent_card', {}).get('agent_id')
+            if fetched_agent_id != requester_agent_id:
+                return jsonify({"error": f"Certificate mismatch: expected {requester_agent_id}, got {fetched_agent_id}"}), 400
+            print(f"[INFO] Certificate cached successfully")
         
         # Verify signature using requester's public key
-        # We need to get the public key - it should be in the agent card
-        # For now, let's create a simplified version that accepts requests
         
         # Create request object for user acceptance
         request_info = {
@@ -162,6 +160,102 @@ def handle_communication_request():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/agent/communicate/keyexchange', methods=['POST'])
+def handle_key_exchange():
+    """
+    Handle authenticated Diffie-Hellman key exchange.
+    Verifies peer's signed DH public key, generates own keypair,
+    derives shared AES key, and returns signed DH public key.
+    """
+    from routes.crypto_utils import (
+        generate_dh_parameters,
+        generate_dh_keypair,
+        sign_dh_public_key,
+        verify_signed_dh_key,
+        derive_aes_key,
+        deserialize_dh_public_key,
+        serialize_dh_public_key
+    )
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    
+    try:
+        data = request.json
+        
+        # Extract key exchange data
+        session_id = data.get('session_id')
+        dh_public_b64 = data.get('dh_public')
+        timestamp = data.get('timestamp')
+        signature_b64 = data.get('signature')
+        
+        if not all([session_id, dh_public_b64, timestamp, signature_b64]):
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        print(f"\n[KEY EXCHANGE] Received request for session: {session_id}")
+        
+        # Verify session exists
+        if session_id not in agent.active_sessions:
+            return jsonify({"error": "Session not found"}), 404
+        
+        session = agent.active_sessions[session_id]
+        
+        # Get peer's public key for signature verification
+        if session.peer_agent_id not in agent.peer_certificates:
+            return jsonify({"error": "Peer certificate not found"}), 400
+        
+        peer_cert = agent.peer_certificates[session.peer_agent_id]
+        peer_public_key_pem = peer_cert['agent_card']['public_key']
+        peer_public_key = load_pem_public_key(peer_public_key_pem.encode())
+        
+        # Decode peer's DH public key
+        dh_public_bytes = base64.b64decode(dh_public_b64)
+        signature = base64.b64decode(signature_b64)
+        
+        # Verify signature on peer's DH public key
+        if not verify_signed_dh_key(dh_public_bytes, signature, peer_public_key):
+            return jsonify({"error": "Invalid signature on DH public key"}), 400
+        
+        print(f"[KEY EXCHANGE] ✓ Peer's DH signature verified")
+        
+        # Deserialize peer's DH public key
+        peer_dh_public = deserialize_dh_public_key(dh_public_bytes)
+        
+        # Generate our own DH keypair (using same parameters as peer!)
+        print(f"[KEY EXCHANGE] Generating DH keypair...")
+        dh_parameters = peer_dh_public.parameters()
+        dh_private, dh_public = generate_dh_keypair(dh_parameters)
+        
+        # Compute shared secret
+        print(f"[KEY EXCHANGE] Computing shared secret...")
+        shared_secret = dh_private.exchange(peer_dh_public)
+        
+        # Derive AES key from shared secret
+        aes_key = derive_aes_key(shared_secret)
+        session.aes_key = aes_key
+        
+        print(f"[KEY EXCHANGE] ✓ AES-256 key derived and stored")
+        
+        # Serialize and sign our DH public key
+        our_dh_public_bytes = serialize_dh_public_key(dh_public)
+        our_signature = sign_dh_public_key(dh_public, agent.private_key)
+        
+        # Create response
+        response_data = {
+            "dh_public": base64.b64encode(our_dh_public_bytes).decode(),
+            "timestamp": int(time.time()),
+            "signature": base64.b64encode(our_signature).decode()
+        }
+        
+        print(f"[KEY EXCHANGE] ✓ Key exchange complete for session: {session_id}")
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        print(f"[ERROR] Key exchange failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 def run_flask():
         app.run(
         host='0.0.0.0',
@@ -214,7 +308,7 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | exit")
+            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | keyexchange | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
@@ -330,6 +424,55 @@ if __name__ == "__main__":
                 print(f"\nSession created. Use 'sessions' to view details.")
             else:
                 print(f"✗ Communication request failed: {result}")
+        elif cmd == "keyexchange":
+            if not agent.my_certificate:
+                print("✗ Agent not registered. Run 'setup' first.")
+                continue
+            
+            if not agent.active_sessions:
+                print("✗ No active sessions. Use 'request' to create a session first.")
+                continue
+            
+            print("\nPerform Key Exchange")
+            print("="*60)
+            print("\nActive Sessions:")
+            for i, (session_id, session) in enumerate(agent.active_sessions.items(), 1):
+                key_status = "Established" if session.aes_key else "Pending"
+                print(f"  {i}. {session_id[:16]}... (Peer: {session.peer_agent_id}, Key: {key_status})")
+            
+            session_input = input("\nEnter session number: ").strip()
+            
+            if not session_input.isdigit():
+                print("✗ Invalid input. Please enter a number.")
+                continue
+            
+            session_idx = int(session_input) - 1
+            session_list = list(agent.active_sessions.items())
+            
+            if session_idx < 0 or session_idx >= len(session_list):
+                print("✗ Invalid session number.")
+                continue
+            
+            session_id, session = session_list[session_idx]
+            
+            if session.aes_key:
+                print(f"✗ AES key already established for this session.")
+                continue
+            
+            if not session.peer_address:
+                peer_address = input("Enter peer address (e.g., https://localhost:5001): ").strip()
+                session.peer_address = peer_address
+            else:
+                peer_address = session.peer_address
+            
+            print(f"\nInitiating key exchange with {session.peer_agent_id}...")
+            success, message = agent.perform_key_exchange(session_id, peer_address)
+            
+            if success:
+                print(f"✓ {message}")
+                print(f"✓ Session ready for encrypted communication")
+            else:
+                print(f"✗ Key exchange failed: {message}")
         elif cmd == "exit":
             print("Shutting down...")
             break
