@@ -55,6 +55,12 @@ class TravellerAgent:
         self.controller_public_key = None  # Will be loaded dynamically
 
         # -----------------------------
+        # Certificate Storage
+        # -----------------------------
+        self.my_certificate = None  # Stores certificate issued by controller
+        self.peer_certificates = {}  # {agent_id: certificate_data}
+
+        # -----------------------------
         # Timestamps
         # -----------------------------
         current_time = int(time.time())
@@ -265,6 +271,9 @@ class TravellerAgent:
                 
                 if verified:
                     print(f"[INFO] ✓ {verify_msg}")
+                    # Store certificate after successful verification
+                    self.my_certificate = certificate
+                    print(f"[INFO] Certificate stored successfully")
                 else:
                     print(f"[WARNING] ✗ {verify_msg}")
                 
@@ -277,8 +286,127 @@ class TravellerAgent:
         except Exception as e:
             return False, f"Registration error: {str(e)}"
         
+    # -----------------------------------
+    # Fetch Peer Certificate
+    # -----------------------------------
+    def fetch_peer_certificate(self, peer_address):
+        """
+        Fetch a peer agent's certificate from their /agent/certificate endpoint.
+        
+        Args:
+            peer_address: Base URL of peer agent (e.g., "https://127.0.0.1:5001")
+            
+        Returns:
+            (success: bool, certificate: dict or error_message: str)
+        """
+        try:
+            print(f"[INFO] Fetching certificate from {peer_address}...")
+            
+            response = requests.get(
+                f"{peer_address}/agent/certificate",
+                verify=False,  # For self-signed certificates
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                certificate = response.json()
+                agent_id = certificate.get('agent_card', {}).get('agent_id', 'unknown')
+                
+                # Store in peer certificates cache
+                self.peer_certificates[agent_id] = certificate
+                print(f"[INFO] ✓ Certificate retrieved for agent: {agent_id}")
+                
+                return True, certificate
+            elif response.status_code == 404:
+                return False, "Peer agent has not registered with controller yet"
+            else:
+                return False, f"Failed to fetch certificate: Status {response.status_code}"
+                
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to peer at {peer_address}"
+        except requests.exceptions.Timeout:
+            return False, f"Connection timeout to {peer_address}"
+        except Exception as e:
+            return False, f"Error fetching certificate: {str(e)}"
     
-
+    # -----------------------------------
+    # Verify Peer Certificate
+    # -----------------------------------
+    def verify_peer_certificate(self, certificate):
+        """
+        Verify a peer agent's certificate by checking the controller's signature.
+        
+        Args:
+            certificate: Certificate dictionary from peer agent
+            
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            # Check if we have the controller's public key
+            if self.controller_public_key is None:
+                return False, "Controller public key not loaded. Run 'trust' command first."
+            
+            # Extract certificate components
+            agent_card = certificate.get('agent_card')
+            controller_signature = certificate.get('controller_signature')
+            expires_at = certificate.get('expires_at')
+            
+            if not all([agent_card, controller_signature, expires_at]):
+                return False, "Invalid certificate format: missing required fields"
+            
+            # Check expiry
+            current_time = int(time.time())
+            if current_time > expires_at:
+                return False, f"Certificate expired at {expires_at}"
+            
+            # Prepare data for signature verification
+            # The controller signs the entire certificate minus the signature field
+            cert_data = {
+                'agent_card': agent_card,
+                'agent_signature': certificate.get('agent_signature'),
+                'controller_signature': controller_signature,
+                'issued_at': certificate.get('issued_at'),
+                'expires_at': expires_at,
+                'nonce': certificate.get('nonce')
+            }
+            
+            # Remove controller_signature for verification (it signs everything else)
+            verification_data = {
+                'agent_card': agent_card,
+                'agent_signature': certificate.get('agent_signature'),
+                'issued_at': certificate.get('issued_at'),
+                'expires_at': expires_at,
+                'nonce': certificate.get('nonce')
+            }
+            
+            # Canonical JSON serialization
+            data_bytes = self.canonical_json(verification_data)
+            
+            # Decode signature
+            signature_bytes = base64.b64decode(controller_signature)
+            
+            # Verify signature
+            try:
+                self.controller_public_key.verify(
+                    signature_bytes,
+                    data_bytes,
+                    padding.PSS(
+                        mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=padding.PSS.MAX_LENGTH
+                    ),
+                    hashes.SHA256()
+                )
+                
+                agent_id = agent_card.get('agent_id', 'unknown')
+                return True, f"Certificate valid for agent: {agent_id}"
+                
+            except Exception as verify_error:
+                return False, f"Invalid controller signature: {str(verify_error)}"
+            
+        except Exception as e:
+            return False, f"Certificate verification error: {str(e)}"
+    
 
     def get_all_agent_cards(self, controller_address): 
         """

@@ -38,6 +38,20 @@ def receive_message():
     print(f"\n[RECEIVED] {data}")
     return jsonify({"status": "received"}), 200
 
+@app.route('/agent/certificate', methods=['GET'])
+def get_certificate():
+    """
+    Endpoint to retrieve this agent's certificate issued by the controller.
+    Used by peer agents for certificate verification.
+    """
+    if agent.my_certificate is None:
+        return jsonify({
+            "error": "Certificate not yet issued",
+            "message": "Agent must register with controller first"
+        }), 404
+    
+    return jsonify(agent.my_certificate), 200
+
 
 def run_flask():
         app.run(
