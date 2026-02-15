@@ -482,10 +482,121 @@ class TravellerAgent:
             error_msg = f"Error retrieving agent cards: {str(e)}"
             print(f"[ERROR] {error_msg}")
             return False, error_msg
+
+    # -----------------------------------
+    # Phase 4: Communication Request
+    # -----------------------------------
+    def send_communication_request(self, peer_address, peer_agent_id):
+        """
+        Send a communication request to a peer agent.
         
-
-    
-
-        
-
-    
+        Args:
+            peer_address: HTTPS address of peer (e.g., "https://localhost:5001")
+            peer_agent_id: Agent ID of the peer
+            
+        Returns:
+            (success: bool, session_id: str or error_message: str)
+        """
+        try:
+            import uuid
+            
+            # Generate unique request ID
+            request_id = str(uuid.uuid4())
+            timestamp = int(time.time())
+            
+            # Create request payload
+            request_payload = {
+                "request_id": request_id,
+                "agent_id": self.agent_id,
+                "timestamp": timestamp
+            }
+            
+            # Sign the entire payload
+            payload_bytes = self.canonical_json(request_payload)
+            signature = self.private_key.sign(
+                payload_bytes,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            
+            request_payload["signature"] = base64.b64encode(signature).decode()
+            
+            print(f"[INFO] Sending communication request to {peer_agent_id}...")
+            
+            # Send POST request
+            response = requests.post(
+                f"{peer_address}/agent/communicate/request",
+                json=request_payload,
+                verify=False,  # Self-signed certificates
+                timeout=30  # 30 second timeout
+            )
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                
+                # Verify response signature
+                if not response_data.get('accepted'):
+                    return False, "Request was rejected by peer"
+                
+                # Extract session_id
+                session_id = response_data.get('session_id')
+                response_signature = response_data.get('signature')
+                response_timestamp = response_data.get('timestamp')
+                
+                if not all([session_id, response_signature, response_timestamp]):
+                    return False, "Invalid response format from peer"
+                
+                # Verify signature using peer's public key
+                # First, fetch peer's certificate if not cached
+                if peer_agent_id not in self.peer_certificates:
+                    cert_success, cert_or_error = self.fetch_peer_certificate(peer_address)
+                    if not cert_success:
+                        return False, f"Failed to fetch peer certificate: {cert_or_error}"
+                
+                peer_cert = self.peer_certificates[peer_agent_id]
+                peer_public_key_pem = peer_cert['agent_card']['public_key']
+                peer_public_key = load_pem_public_key(peer_public_key_pem.encode())
+                
+                # Verify response signature
+                response_data_for_sig = {
+                    "accepted": response_data['accepted'],
+                    "session_id": session_id,
+                    "timestamp": response_timestamp
+                }
+                response_bytes = self.canonical_json(response_data_for_sig)
+                
+                try:
+                    peer_public_key.verify(
+                        base64.b64decode(response_signature),
+                        response_bytes,
+                        padding.PSS(
+                            mgf=padding.MGF1(hashes.SHA256()),
+                            salt_length=padding.PSS.MAX_LENGTH
+                        ),
+                        hashes.SHA256()
+                    )
+                    print(f"[INFO] ✓ Response signature verified")
+                except Exception as e:
+                    return False, f"Response signature verification failed: {e}"
+                
+                print(f"[INFO] ✓ Request accepted! Session ID: {session_id}")
+                return True, session_id
+                
+            else:
+                error_msg = f"Request failed with status {response.status_code}"
+                try:
+                    error_detail = response.json().get('error', response.text)
+                    error_msg += f": {error_detail}"
+                except:
+                    pass
+                return False, error_msg
+                
+        except requests.exceptions.Timeout:
+            return False, "Request timed out - peer may be unreachable"
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to peer at {peer_address}"
+        except Exception as e:
+            return False, f"Error sending request: {str(e)}"
