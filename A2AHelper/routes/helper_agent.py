@@ -734,3 +734,82 @@ class HelperAgent:
             import traceback
             traceback.print_exc()
             return False, f"Key exchange error: {str(e)}"
+    
+    # -----------------------------------
+    # Send Encrypted Message
+    # -----------------------------------
+    def send_encrypted_message(self, session_id, message):
+        """
+        Send an encrypted message to a peer in an active session.
+        
+        Args:
+            session_id: UUID of the session
+            message: Plain text message to encrypt and send
+            
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        from routes.crypto_utils import encrypt_message
+        
+        try:
+            # Verify session exists
+            if session_id not in self.active_sessions:
+                return False, "Session not found"
+            
+            session = self.active_sessions[session_id]
+            
+            # Verify AES key exists
+            if not session.aes_key:
+                return False, "No AES key (perform key exchange first)"
+            
+            # Verify peer address
+            if not session.peer_address:
+                return False, "No peer address in session"
+            
+            print(f"[SEND] Encrypting message for {session.peer_agent_id}...")
+            
+            # Increment send sequence
+            next_seq = session.increment_send_seq()
+            
+            # Encrypt message
+            encrypted_data = encrypt_message(
+                message,
+                session.aes_key,
+                next_seq
+            )
+            
+            print(f"[SEND] Encrypted with sequence: {next_seq}")
+            
+            # Prepare payload
+            payload = {
+                "session_id": session_id,
+                "ciphertext": encrypted_data['ciphertext'],
+                "nonce": encrypted_data['nonce'],
+                "sequence_number": encrypted_data['sequence_number'],
+                "timestamp": int(time.time())
+            }
+            
+            # Send to peer
+            print(f"[SEND] Sending to {session.peer_address}...")
+            
+            response = requests.post(
+                f"{session.peer_address}/agent/communicate/send",
+                json=payload,
+                verify=False,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                print(f"[SEND] ✓ Message delivered")
+                return True, "Message delivered"
+            else:
+                error = response.json().get('error', 'Unknown error')
+                return False, f"Delivery failed: {error}"
+        
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to peer"
+        except Exception as e:
+            print(f"[ERROR] Send failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, f"Send error: {str(e)}"

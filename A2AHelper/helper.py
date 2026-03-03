@@ -264,6 +264,86 @@ def handle_key_exchange():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/agent/communicate/send', methods=['POST'])
+def handle_encrypted_message():
+    """
+    Handle incoming encrypted messages in an active session.
+    Decrypts message using session AES key and verifies sequence number.
+    """
+    from routes.crypto_utils import decrypt_message
+    
+    try:
+        data = request.json
+        
+        # Extract message data
+        session_id = data.get('session_id')
+        ciphertext = data.get('ciphertext')
+        nonce = data.get('nonce')
+        sequence_number = data.get('sequence_number')
+        timestamp = data.get('timestamp')
+        
+        if not all([session_id, ciphertext, nonce, sequence_number is not None, timestamp]):
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        print(f"\n[MESSAGE] Received encrypted message for session: {session_id[:16]}...")
+        
+        # Verify session exists
+        if session_id not in agent.active_sessions:
+            return jsonify({"error": "Session not found"}), 404
+        
+        session = agent.active_sessions[session_id]
+        
+        # Verify AES key exists
+        if not session.aes_key:
+            return jsonify({"error": "Session not encrypted (no AES key)"}), 400
+        
+        # Verify sequence number for replay protection
+        expected_seq = session.recv_seq + 1
+        if sequence_number != expected_seq:
+            return jsonify({
+                "error": f"Sequence mismatch. Expected {expected_seq}, got {sequence_number}"
+            }), 400
+        
+        print(f"[MESSAGE] Sequence valid: {sequence_number}")
+        
+        # Decrypt message
+        success, plaintext = decrypt_message(
+            ciphertext,
+            nonce,
+            session.aes_key,
+            sequence_number
+        )
+        
+        if not success:
+            return jsonify({"error": f"Decryption failed: {plaintext}"}), 400
+        
+        print(f"[MESSAGE] ✓ Decrypted successfully")
+        print(f"\n[{session.peer_agent_id}] > {plaintext}\n")
+        
+        # Increment receive sequence
+        session.increment_recv_seq()
+        
+        # Store message
+        session.incoming_messages.append({
+            "from": session.peer_agent_id,
+            "message": plaintext,
+            "timestamp": timestamp,
+            "sequence": sequence_number
+        })
+        
+        # Send acknowledgment
+        return jsonify({
+            "status": "received",
+            "sequence_number": sequence_number
+        }), 200
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to handle message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 def run_flask():
         app.run(
         host='0.0.0.0',
@@ -316,7 +396,7 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | keyexchange | exit")
+            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | keyexchange | send | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
@@ -481,6 +561,63 @@ if __name__ == "__main__":
                 print(f"✓ Session ready for encrypted communication")
             else:
                 print(f"✗ Key exchange failed: {message}")
+        elif cmd == "send":
+            if not agent.my_certificate:
+                print("✗ Agent not registered. Run 'setup' first.")
+                continue
+            
+            if not agent.active_sessions:
+                print("✗ No active sessions. Use 'request' to create a session first.")
+                continue
+            
+            # List sessions with encryption status
+            print("\nSend Encrypted Message")
+            print("="*60)
+            print("\nActive Sessions:")
+            encrypted_sessions = []
+            for i, (session_id, session) in enumerate(agent.active_sessions.items(), 1):
+                if session.aes_key:
+                    encrypted_sessions.append((session_id, session))
+                    print(f"  {i}. {session_id[:16]}... (Peer: {session.peer_agent_id}, Key: ✓ Established)")
+                else:
+                    print(f"  {i}. {session_id[:16]}... (Peer: {session.peer_agent_id}, Key: ✗ Pending)")
+            
+            if not encrypted_sessions:
+                print("\n✗ No sessions with established encryption. Run 'keyexchange' first.")
+                continue
+            
+            session_input = input("\nEnter session number: ").strip()
+            
+            if not session_input.isdigit():
+                print("✗ Invalid input. Please enter a number.")
+                continue
+            
+            session_idx = int(session_input) - 1
+            session_list = list(agent.active_sessions.items())
+            
+            if session_idx < 0 or session_idx >= len(session_list):
+                print("✗ Invalid session number.")
+                continue
+            
+            session_id, session = session_list[session_idx]
+            
+            if not session.aes_key:
+                print(f"✗ No encryption key for this session. Run 'keyexchange' first.")
+                continue
+            
+            message = input("\nEnter message to send: ").strip()
+            
+            if not message:
+                print("✗ Message cannot be empty.")
+                continue
+            
+            print(f"\nSending encrypted message to {session.peer_agent_id}...")
+            success, result = agent.send_encrypted_message(session_id, message)
+            
+            if success:
+                print(f"✓ {result}")
+            else:
+                print(f"✗ Send failed: {result}")
         elif cmd == "exit":
             print("Shutting down...")
             break
