@@ -800,6 +800,10 @@ class HelperAgent:
             )
             
             if response.status_code == 200:
+                if message == "command:exit_convo":
+                    session.conversation_active = False
+                else:
+                    session.conversation_active = True
                 print(f"[SEND] ✓ Message delivered")
                 return True, "Message delivered"
             else:

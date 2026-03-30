@@ -153,7 +153,7 @@ def handle_communication_request():
         session = SessionState(
             session_id=session_id,
             peer_agent_id=requester_agent_id,
-            peer_address=None  # Will be set during key exchange
+            peer_address=requester_address
         )
         agent.active_sessions[session_id] = session
         
@@ -317,6 +317,12 @@ def handle_encrypted_message():
         if not success:
             return jsonify({"error": f"Decryption failed: {plaintext}"}), 400
         
+        if plaintext == "command:exit_convo":
+            session.conversation_active = False
+            print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
+        else:
+            session.conversation_active = True
+
         print(f"[MESSAGE] ✓ Decrypted successfully")
         print(f"\n[{session.peer_agent_id}] > {plaintext}\n")
         
@@ -488,6 +494,7 @@ if __name__ == "__main__":
                     print(f"  Status: {'Active' if session.is_active else 'Inactive'}")
                     print(f"  Created: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(session.created_at))}")
                     print(f"  AES Key: {'Established' if session.aes_key else 'Pending'}")
+                    print(f"  Conversation: {'Active' if session.conversation_active else 'Idle'}")
                 print(f"{'='*60}\n")
         elif cmd == "request":
             if not agent.my_certificate:
@@ -604,20 +611,41 @@ if __name__ == "__main__":
             if not session.aes_key:
                 print(f"✗ No encryption key for this session. Run 'keyexchange' first.")
                 continue
+
+            if not session.peer_address:
+                peer_address = input("Enter peer address (e.g., https://localhost:5002): ").strip()
+                if not peer_address:
+                    print("✗ Peer address is required.")
+                    continue
+                session.peer_address = peer_address
             
-            message = input("\nEnter message to send: ").strip()
-            
-            if not message:
-                print("✗ Message cannot be empty.")
-                continue
-            
-            print(f"\nSending encrypted message to {session.peer_agent_id}...")
-            success, result = agent.send_encrypted_message(session_id, message)
-            
-            if success:
-                print(f"✓ {result}")
-            else:
-                print(f"✗ Send failed: {result}")
+            session.conversation_active = True
+            print("\nPersistent conversation started.")
+            print("Type messages and press Enter to send.")
+            print("Type 'command:exit_convo' to end conversation (session remains active).")
+
+            while True:
+                if not session.conversation_active:
+                    print("\n[INFO] Conversation ended by peer. Session is still available.")
+                    break
+
+                message = input("\nYou> ").strip()
+
+                if not message:
+                    print("✗ Message cannot be empty.")
+                    continue
+
+                print(f"\nSending encrypted message to {session.peer_agent_id}...")
+                success, result = agent.send_encrypted_message(session_id, message)
+
+                if success:
+                    print(f"✓ {result}")
+                    if message == "command:exit_convo":
+                        print("[INFO] Conversation ended locally. Session is still available.")
+                        break
+                else:
+                    print(f"✗ Send failed: {result}")
+                    break
         elif cmd == "exit":
             print("Shutting down...")
             break
