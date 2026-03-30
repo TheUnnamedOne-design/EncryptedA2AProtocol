@@ -14,6 +14,8 @@ from routes.traveller_agent import TravellerAgent
 
 try:
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
@@ -52,13 +54,30 @@ class MazeVisualizer:
         colors = {
             "unknown": "#d9d9d9",
             "safe": "#b7e4c7",
-            "blocked": "#6c757d",
+            "blocked": "#b55239",
             "pit": "#4d4d4d",
-            "wumpus": "#e63946",
-            "goal": "#ffd166",
+            "wumpus": "#b565d9",
+            "goal": "#2a9d8f",
             "out": "#1d3557",
         }
         return colors.get(state, "#d9d9d9")
+
+    def _draw_state_marker(self, x, y, state):
+        if state == "goal":
+            # Green triangular goal flag.
+            self.ax.scatter(x, y, marker="^", s=190, c="#2a9d8f", edgecolors="black", linewidths=1.2, zorder=5)
+            self.ax.plot([x - 0.2, x - 0.2], [y + 0.25, y - 0.2], color="black", linewidth=1.2, zorder=6)
+        elif state == "blocked":
+            # Brick-style blocked tile.
+            brick = plt.Rectangle((x - 0.34, y - 0.34), 0.68, 0.68, facecolor="#b55239", edgecolor="#7f2f1a", hatch="xx", linewidth=1.0, zorder=5)
+            self.ax.add_patch(brick)
+        elif state == "pit":
+            self.ax.scatter(x, y, marker="v", s=130, c="#222222", edgecolors="black", linewidths=1.0, zorder=5)
+        elif state == "wumpus":
+            # Stylized creature marker.
+            self.ax.scatter(x, y, marker="*", s=190, c="#b565d9", edgecolors="black", linewidths=1.0, zorder=5)
+        elif state == "out":
+            self.ax.scatter(x, y, marker="x", s=120, c="#1d3557", linewidths=1.8, zorder=5)
 
     def update_with_helper_payload(self, payload):
         origin = payload.get("origin", {})
@@ -95,23 +114,60 @@ class MazeVisualizer:
                 state = self.discovered.get((x, y), "unknown")
                 rect = plt.Rectangle((x - 0.5, y - 0.5), 1, 1, color=self._color_for_state(state), alpha=0.8)
                 self.ax.add_patch(rect)
+                if state != "unknown":
+                    self._draw_state_marker(x, y, state)
 
         if self.traveller_pos:
             tx, ty = self.traveller_pos
             self.ax.plot(tx, ty, marker="o", markersize=12, color="#1d3557")
             self.ax.text(tx, ty - 0.2, "T", ha="center", va="center", color="white", fontsize=9, fontweight="bold")
 
+        legend_handles = [
+            Patch(facecolor="#d9d9d9", edgecolor="black", label="Unknown"),
+            Patch(facecolor="#b7e4c7", edgecolor="black", label="Safe"),
+            Patch(facecolor="#b55239", edgecolor="#7f2f1a", hatch="xx", label="Blocked"),
+            Line2D([0], [0], marker="v", color="w", markerfacecolor="#222222", markeredgecolor="black", markersize=8, label="Pit"),
+            Line2D([0], [0], marker="*", color="w", markerfacecolor="#b565d9", markeredgecolor="black", markersize=12, label="Wumpus"),
+            Line2D([0], [0], marker="^", color="w", markerfacecolor="#2a9d8f", markeredgecolor="black", markersize=10, label="Goal Flag"),
+            Line2D([0], [0], marker="o", color="w", markerfacecolor="#1d3557", markeredgecolor="#1d3557", markersize=9, label="Traveller"),
+        ]
+        self.ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0, frameon=True, fontsize=8)
+        self.fig.tight_layout()
+
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
         plt.pause(0.01)
 
 
-maze_visualizer = MazeVisualizer(width=10, height=10)
+maze_visualizer = None
 maze_update_queue = queue.Queue()
 
 
-def process_pending_maze_updates(active_session_id=None):
+def open_maze_visualizer():
+    global maze_visualizer
     if not MATPLOTLIB_AVAILABLE:
+        return None
+
+    if maze_visualizer is None:
+        maze_visualizer = MazeVisualizer(width=10, height=10)
+    return maze_visualizer
+
+
+def close_maze_visualizer():
+    global maze_visualizer
+    if not MATPLOTLIB_AVAILABLE or maze_visualizer is None:
+        return
+
+    try:
+        plt.close(maze_visualizer.fig)
+    except Exception:
+        pass
+
+    maze_visualizer = None
+
+
+def process_pending_maze_updates(active_session_id=None):
+    if not MATPLOTLIB_AVAILABLE or maze_visualizer is None:
         return
 
     pending_for_other_sessions = []
@@ -422,6 +478,7 @@ def handle_encrypted_message():
         if plaintext == "command:exit_convo":
             session.conversation_active = False
             session.maze_mode = False
+            close_maze_visualizer()
             print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
         else:
             session.conversation_active = True
@@ -815,6 +872,8 @@ if __name__ == "__main__":
                 print(f"✗ Failed to start maze solver: {result}")
                 continue
 
+            open_maze_visualizer()
+
             session.conversation_active = True
             session.maze_mode = True
 
@@ -835,6 +894,7 @@ if __name__ == "__main__":
                     agent.send_encrypted_message(session_id, "command:exit_convo")
                     session.conversation_active = False
                     session.maze_mode = False
+                    close_maze_visualizer()
                     break
 
                 if "," not in coord_input:
@@ -860,6 +920,7 @@ if __name__ == "__main__":
 
             print("[MAZE] Solver stopped. Session remains available.")
         elif cmd == "exit":
+            close_maze_visualizer()
             print("Shutting down...")
             break
         else:
