@@ -141,6 +141,7 @@ class MazeVisualizer:
 
 maze_visualizer = None
 maze_update_queue = queue.Queue()
+maze_runtime = {}  # {session_id: {event, last_type, last_payload, last_text}}
 
 
 def open_maze_visualizer():
@@ -164,6 +165,187 @@ def close_maze_visualizer():
         pass
 
     maze_visualizer = None
+
+
+def _get_maze_runtime(session_id):
+    runtime = maze_runtime.get(session_id)
+    if runtime is None:
+        runtime = {
+            "event": threading.Event(),
+            "last_type": None,
+            "last_payload": None,
+            "last_text": None,
+        }
+        maze_runtime[session_id] = runtime
+    return runtime
+
+
+def _set_maze_runtime(session_id, msg_type, payload=None, text=None):
+    runtime = _get_maze_runtime(session_id)
+    runtime["last_type"] = msg_type
+    runtime["last_payload"] = payload
+    runtime["last_text"] = text
+    runtime["event"].set()
+
+
+def wait_for_maze_runtime(session_id, timeout=8):
+    runtime = _get_maze_runtime(session_id)
+    signaled = runtime["event"].wait(timeout)
+    if not signaled:
+        return None, None, None
+
+    runtime["event"].clear()
+    return runtime["last_type"], runtime["last_payload"], runtime["last_text"]
+
+
+def run_maze_dfs_automation(session_id, session):
+    """Automated DFS maze exploration that avoids known hazards and blocked cells."""
+    print("[MAZE-AI] DFS automation started")
+
+    allowed_states = {"safe", "goal"}
+    blocked_states = {"blocked", "out", "pit", "wumpus"}
+
+    known_states = {}
+    adjacency = {}
+    visited = set()
+    stack = []
+
+    def ingest_adjacent_payload(payload):
+        origin_info = payload.get("origin", {})
+        ox = origin_info.get("x")
+        oy = origin_info.get("y")
+        if ox is None or oy is None:
+            return None
+
+        origin = (ox, oy)
+        known_states[origin] = origin_info.get("state", "safe")
+
+        neighbors = []
+        for neighbor in payload.get("neighbors", []):
+            nx = neighbor.get("x")
+            ny = neighbor.get("y")
+            if nx is None or ny is None:
+                continue
+
+            ncoord = (nx, ny)
+            nstate = neighbor.get("state", "unknown")
+            known_states[ncoord] = nstate
+            neighbors.append((ncoord, nstate))
+
+        adjacency[origin] = neighbors
+        return origin
+
+    msg_type, payload, _ = wait_for_maze_runtime(session_id, timeout=3)
+    if msg_type == "maze_adjacent" and payload:
+        start = ingest_adjacent_payload(payload)
+    else:
+        print("[MAZE-AI] Waiting for initial maze info...")
+        msg_type, payload, _ = wait_for_maze_runtime(session_id, timeout=8)
+        if msg_type != "maze_adjacent" or not payload:
+            print("[MAZE-AI] Could not receive initial adjacency data.")
+            return False
+        start = ingest_adjacent_payload(payload)
+
+    if start is None:
+        print("[MAZE-AI] Invalid start payload from helper.")
+        return False
+
+    visited.add(start)
+    stack.append(start)
+
+    while stack and session.conversation_active:
+        process_pending_maze_updates(active_session_id=session_id)
+
+        current = stack[-1]
+        if known_states.get(current) == "goal":
+            print(f"[MAZE-AI] Goal reached at {current}")
+            return True
+
+        neighbors = adjacency.get(current, [])
+
+        next_target = None
+        for ncoord, nstate in neighbors:
+            if ncoord in visited:
+                continue
+            if nstate in allowed_states:
+                next_target = ncoord
+                break
+            if nstate in blocked_states:
+                visited.add(ncoord)
+
+        if next_target is not None:
+            nx, ny = next_target
+            print(f"[MAZE-AI] Exploring {next_target}")
+            ok, err = agent.send_encrypted_message(session_id, f"maze_coord:{nx},{ny}")
+            if not ok:
+                print(f"[MAZE-AI] Send failed: {err}")
+                return False
+
+            msg_type, payload, text = wait_for_maze_runtime(session_id, timeout=8)
+            process_pending_maze_updates(active_session_id=session_id)
+
+            if msg_type == "dead":
+                print("[MAZE-AI] AGENT DIED")
+                return False
+            if msg_type == "maze_error":
+                print(f"[MAZE-AI] Helper error: {text}")
+                return False
+            if msg_type == "maze_move_blocked" and payload:
+                attempted = payload.get("attempted", {})
+                ax = attempted.get("x")
+                ay = attempted.get("y")
+                reason = payload.get("reason", "blocked")
+                if ax is not None and ay is not None:
+                    known_states[(ax, ay)] = reason
+                    visited.add((ax, ay))
+                adjacent_payload = payload.get("adjacent")
+                if adjacent_payload:
+                    ingest_adjacent_payload(adjacent_payload)
+                continue
+            if msg_type != "maze_adjacent" or not payload:
+                print("[MAZE-AI] Unexpected/timeout maze response while exploring.")
+                return False
+
+            arrived = ingest_adjacent_payload(payload)
+            if arrived is None:
+                print("[MAZE-AI] Invalid adjacency payload while exploring.")
+                return False
+
+            visited.add(arrived)
+            if arrived != current:
+                stack.append(arrived)
+            continue
+
+        if len(stack) == 1:
+            print("[MAZE-AI] No more safe unexplored paths. DFS complete.")
+            return known_states.get(current) == "goal"
+
+        back = stack[-2]
+        bx, by = back
+        print(f"[MAZE-AI] Backtracking to {back}")
+        ok, err = agent.send_encrypted_message(session_id, f"maze_coord:{bx},{by}")
+        if not ok:
+            print(f"[MAZE-AI] Backtrack failed: {err}")
+            return False
+
+        msg_type, payload, text = wait_for_maze_runtime(session_id, timeout=8)
+        process_pending_maze_updates(active_session_id=session_id)
+
+        if msg_type == "dead":
+            print("[MAZE-AI] AGENT DIED")
+            return False
+        if msg_type == "maze_error":
+            print(f"[MAZE-AI] Helper error: {text}")
+            return False
+        if msg_type == "maze_adjacent" and payload:
+            ingest_adjacent_payload(payload)
+            stack.pop()
+            continue
+
+        print("[MAZE-AI] Unexpected/timeout maze response while backtracking.")
+        return False
+
+    return False
 
 
 def process_pending_maze_updates(active_session_id=None):
@@ -479,6 +661,7 @@ def handle_encrypted_message():
             session.conversation_active = False
             session.maze_mode = False
             close_maze_visualizer()
+            _set_maze_runtime(session_id, "exit")
             print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
         else:
             session.conversation_active = True
@@ -499,35 +682,42 @@ def handle_encrypted_message():
 
         if plaintext == "maze_solver:ready":
             session.maze_mode = True
+            _set_maze_runtime(session_id, "ready")
             print("[MAZE] Helper is ready. Send coordinates using maze_solver mode.")
         elif plaintext == "AGENT DIED":
             print("[MAZE] AGENT DIED")
             session.conversation_active = False
             session.maze_mode = False
             close_maze_visualizer()
+            _set_maze_runtime(session_id, "dead")
         elif plaintext.startswith("maze_move_blocked:"):
             try:
                 payload_text = plaintext.split(":", 1)[1]
                 payload = json.loads(payload_text)
                 adjacent_payload = payload.get("adjacent", {})
                 maze_update_queue.put((session_id, adjacent_payload))
+                _set_maze_runtime(session_id, "maze_move_blocked", payload=payload)
 
                 attempted = payload.get("attempted", {})
                 reason = payload.get("reason", "blocked")
                 print(f"[MAZE] Move rejected ({reason}) at ({attempted.get('x')}, {attempted.get('y')}). Position unchanged.")
             except Exception as parse_error:
                 print(f"[MAZE] Failed to parse blocked-move payload: {parse_error}")
+                _set_maze_runtime(session_id, "maze_error", text=str(parse_error))
         elif plaintext.startswith("maze_adjacent:"):
             try:
                 payload_text = plaintext.split(":", 1)[1]
                 payload = json.loads(payload_text)
                 maze_update_queue.put((session_id, payload))
                 session.maze_mode = True
+                _set_maze_runtime(session_id, "maze_adjacent", payload=payload)
                 print("[MAZE] Received adjacency data from helper")
             except Exception as parse_error:
                 print(f"[MAZE] Failed to parse helper payload: {parse_error}")
+                _set_maze_runtime(session_id, "maze_error", text=str(parse_error))
         elif plaintext.startswith("maze_error:"):
             print(f"[MAZE] Helper reported error: {plaintext}")
+            _set_maze_runtime(session_id, "maze_error", text=plaintext)
         
         # Send acknowledgment
         return jsonify({
@@ -896,6 +1086,7 @@ if __name__ == "__main__":
 
             print("[MAZE] Solver started.")
             print("Enter coordinates as x,y (example: 0,0).")
+            print("Type 'command:automate' to run DFS autopilot.")
             print("Type 'command:exit_convo' to stop maze conversation and keep session.")
 
             while True:
@@ -913,6 +1104,14 @@ if __name__ == "__main__":
                     session.maze_mode = False
                     close_maze_visualizer()
                     break
+
+                if coord_input == "command:automate":
+                    automation_success = run_maze_dfs_automation(session_id, session)
+                    if automation_success:
+                        print("[MAZE-AI] DFS completed: goal reached.")
+                    else:
+                        print("[MAZE-AI] DFS ended without reaching goal.")
+                    continue
 
                 if "," not in coord_input:
                     print("✗ Invalid format. Use x,y")
