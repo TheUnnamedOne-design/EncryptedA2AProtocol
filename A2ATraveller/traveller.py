@@ -1,13 +1,24 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import json
+import queue
 from dotenv import load_dotenv
 import threading
 import time
 import base64
+import urllib3
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from routes.traveller_agent import TravellerAgent
+
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
@@ -21,6 +32,105 @@ CONTROLLER_ADDRESS = os.getenv("CONTROLLER_ADDRESS", "https://localhost:5000")
 
 # Initialize agent with address
 agent = TravellerAgent(my_address=f"https://localhost:{PORT}")
+
+
+class MazeVisualizer:
+    def __init__(self, width=10, height=10):
+        self.width = width
+        self.height = height
+        self.discovered = {}  # {(x, y): state}
+        self.traveller_pos = None
+        self.enabled = MATPLOTLIB_AVAILABLE
+
+        if self.enabled:
+            plt.ion()
+            self.fig, self.ax = plt.subplots(figsize=(7, 7))
+            self.fig.canvas.manager.set_window_title("Traveller Maze Solver")
+            self.render()
+
+    def _color_for_state(self, state):
+        colors = {
+            "unknown": "#d9d9d9",
+            "safe": "#b7e4c7",
+            "blocked": "#6c757d",
+            "pit": "#4d4d4d",
+            "wumpus": "#e63946",
+            "goal": "#ffd166",
+            "out": "#1d3557",
+        }
+        return colors.get(state, "#d9d9d9")
+
+    def update_with_helper_payload(self, payload):
+        origin = payload.get("origin", {})
+        ox = origin.get("x")
+        oy = origin.get("y")
+        if ox is not None and oy is not None:
+            self.traveller_pos = (ox, oy)
+            self.discovered[(ox, oy)] = origin.get("state", "safe")
+
+        for neighbor in payload.get("neighbors", []):
+            nx = neighbor.get("x")
+            ny = neighbor.get("y")
+            if nx is None or ny is None:
+                continue
+            if 0 <= nx < self.width and 0 <= ny < self.height:
+                self.discovered[(nx, ny)] = neighbor.get("state", "unknown")
+
+        self.render()
+
+    def render(self):
+        if not self.enabled:
+            return
+
+        self.ax.clear()
+        self.ax.set_xlim(-0.5, self.width - 0.5)
+        self.ax.set_ylim(self.height - 0.5, -0.5)
+        self.ax.set_xticks(range(self.width))
+        self.ax.set_yticks(range(self.height))
+        self.ax.grid(True, color="#cccccc", linewidth=0.6)
+        self.ax.set_title("Wumpus World - Traveller Knowledge Map")
+
+        for y in range(self.height):
+            for x in range(self.width):
+                state = self.discovered.get((x, y), "unknown")
+                rect = plt.Rectangle((x - 0.5, y - 0.5), 1, 1, color=self._color_for_state(state), alpha=0.8)
+                self.ax.add_patch(rect)
+
+        if self.traveller_pos:
+            tx, ty = self.traveller_pos
+            self.ax.plot(tx, ty, marker="o", markersize=12, color="#1d3557")
+            self.ax.text(tx, ty - 0.2, "T", ha="center", va="center", color="white", fontsize=9, fontweight="bold")
+
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        plt.pause(0.01)
+
+
+maze_visualizer = MazeVisualizer(width=10, height=10)
+maze_update_queue = queue.Queue()
+
+
+def process_pending_maze_updates(active_session_id=None):
+    if not MATPLOTLIB_AVAILABLE:
+        return
+
+    pending_for_other_sessions = []
+
+    while not maze_update_queue.empty():
+        try:
+            queued_session_id, payload = maze_update_queue.get_nowait()
+        except queue.Empty:
+            break
+
+        if active_session_id is None or queued_session_id == active_session_id:
+            maze_visualizer.update_with_helper_payload(payload)
+            origin = payload.get("origin", {})
+            print(f"[MAZE] Updated map at ({origin.get('x')}, {origin.get('y')})")
+        else:
+            pending_for_other_sessions.append((queued_session_id, payload))
+
+    for item in pending_for_other_sessions:
+        maze_update_queue.put(item)
 
 @app.route('/', methods=['GET'])
 def home():
@@ -311,6 +421,7 @@ def handle_encrypted_message():
         
         if plaintext == "command:exit_convo":
             session.conversation_active = False
+            session.maze_mode = False
             print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
         else:
             session.conversation_active = True
@@ -328,6 +439,21 @@ def handle_encrypted_message():
             "timestamp": timestamp,
             "sequence": sequence_number
         })
+
+        if plaintext == "maze_solver:ready":
+            session.maze_mode = True
+            print("[MAZE] Helper is ready. Send coordinates using maze_solver mode.")
+        elif plaintext.startswith("maze_adjacent:"):
+            try:
+                payload_text = plaintext.split(":", 1)[1]
+                payload = json.loads(payload_text)
+                maze_update_queue.put((session_id, payload))
+                session.maze_mode = True
+                print("[MAZE] Received adjacency data from helper")
+            except Exception as parse_error:
+                print(f"[MAZE] Failed to parse helper payload: {parse_error}")
+        elif plaintext.startswith("maze_error:"):
+            print(f"[MAZE] Helper reported error: {plaintext}")
         
         # Send acknowledgment
         return jsonify({
@@ -394,7 +520,7 @@ if __name__ == "__main__":
         cmd = input(f"{AGENT_ID}> ").strip().lower()
         
         if cmd == "help":
-            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | keyexchange | send | exit")
+            print("Commands: help | status | info | setup | trust | register | cards | sessions | request | keyexchange | send | maze_solver | exit")
         elif cmd == "status":
             print(f"Agent: {AGENT_ID}, Port: {PORT}, Status: Active")
             trust_status = "✓ Established" if agent.controller_public_key else "✗ Not established"
@@ -487,6 +613,7 @@ if __name__ == "__main__":
                     print(f"  Created: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(session.created_at))}")
                     print(f"  AES Key: {'Established' if session.aes_key else 'Pending'}")
                     print(f"  Conversation: {'Active' if session.conversation_active else 'Idle'}")
+                    print(f"  Maze Mode: {'Enabled' if session.maze_mode else 'Disabled'}")
                 print(f"{'='*60}\n")
         elif cmd == "request":
             if not agent.my_certificate:
@@ -638,6 +765,100 @@ if __name__ == "__main__":
                 else:
                     print(f"✗ Send failed: {result}")
                     break
+        elif cmd == "maze_solver":
+            if not MATPLOTLIB_AVAILABLE:
+                print("✗ matplotlib is not installed in traveller environment.")
+                print("  Install with: pip install matplotlib")
+                continue
+
+            if not agent.my_certificate:
+                print("✗ Agent not registered. Run 'setup' first.")
+                continue
+
+            if not agent.active_sessions:
+                print("✗ No active sessions. Use 'request' to create a session first.")
+                continue
+
+            print("\nMaze Solver Mode")
+            print("="*60)
+            print("\nActive Sessions:")
+            for i, (session_id, session) in enumerate(agent.active_sessions.items(), 1):
+                key_status = "✓ Established" if session.aes_key else "✗ Pending"
+                print(f"  {i}. {session_id[:16]}... (Peer: {session.peer_agent_id}, Key: {key_status})")
+
+            session_input = input("\nEnter session number: ").strip()
+            if not session_input.isdigit():
+                print("✗ Invalid input. Please enter a number.")
+                continue
+
+            session_idx = int(session_input) - 1
+            session_list = list(agent.active_sessions.items())
+            if session_idx < 0 or session_idx >= len(session_list):
+                print("✗ Invalid session number.")
+                continue
+
+            session_id, session = session_list[session_idx]
+            if not session.aes_key:
+                print("✗ No encryption key for this session. Run 'keyexchange' first.")
+                continue
+
+            if not session.peer_address:
+                peer_address = input("Enter peer address (e.g., https://localhost:5001): ").strip()
+                if not peer_address:
+                    print("✗ Peer address is required.")
+                    continue
+                session.peer_address = peer_address
+
+            print("\n[MAZE] Starting maze solver handshake with helper...")
+            ok, result = agent.send_encrypted_message(session_id, "maze_solver:start")
+            if not ok:
+                print(f"✗ Failed to start maze solver: {result}")
+                continue
+
+            session.conversation_active = True
+            session.maze_mode = True
+
+            print("[MAZE] Solver started.")
+            print("Enter coordinates as x,y (example: 0,0).")
+            print("Type 'command:exit_convo' to stop maze conversation and keep session.")
+
+            while True:
+                if not session.conversation_active:
+                    print("[MAZE] Conversation ended by peer.")
+                    break
+
+                process_pending_maze_updates(active_session_id=session_id)
+
+                coord_input = input("MazeCoord> ").strip()
+
+                if coord_input == "command:exit_convo":
+                    agent.send_encrypted_message(session_id, "command:exit_convo")
+                    session.conversation_active = False
+                    session.maze_mode = False
+                    break
+
+                if "," not in coord_input:
+                    print("✗ Invalid format. Use x,y")
+                    continue
+
+                try:
+                    x_text, y_text = coord_input.split(",", 1)
+                    x = int(x_text.strip())
+                    y = int(y_text.strip())
+                except ValueError:
+                    print("✗ Invalid coordinate values. Use integers like 2,3")
+                    continue
+
+                ok, result = agent.send_encrypted_message(session_id, f"maze_coord:{x},{y}")
+                if not ok:
+                    print(f"✗ Send failed: {result}")
+                    break
+
+                # Helper response arrives asynchronously on /agent/communicate/send.
+                time.sleep(0.2)
+                process_pending_maze_updates(active_session_id=session_id)
+
+            print("[MAZE] Solver stopped. Session remains available.")
         elif cmd == "exit":
             print("Shutting down...")
             break

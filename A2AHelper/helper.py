@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import json
 from dotenv import load_dotenv
 import threading
 import time
@@ -27,6 +28,51 @@ CONTROLLER_ADDRESS = os.getenv("CONTROLLER_ADDRESS", "https://127.0.0.1:5000")
 
 # Initialize agent with address
 agent = HelperAgent(my_address=f"https://localhost:{PORT}")
+
+# Wumpus-world-like maze memory used by helper to guide traveller.
+MAZE_WORLD = [
+    ["S", "S", "B", "S", "S", "S", "B", "S", "S", "S"],
+    ["S", "P", "B", "S", "W", "S", "B", "S", "P", "S"],
+    ["S", "S", "S", "S", "B", "S", "S", "S", "S", "S"],
+    ["B", "B", "S", "P", "B", "S", "P", "B", "B", "S"],
+    ["S", "S", "S", "S", "S", "S", "S", "S", "S", "S"],
+    ["S", "B", "P", "B", "S", "B", "S", "W", "B", "S"],
+    ["S", "S", "S", "B", "S", "S", "S", "S", "B", "S"],
+    ["S", "P", "S", "S", "S", "B", "P", "S", "S", "S"],
+    ["S", "S", "B", "W", "S", "S", "B", "S", "P", "S"],
+    ["S", "S", "S", "S", "S", "S", "S", "S", "S", "G"],
+]
+
+
+def _maze_cell_state(x, y):
+    if y < 0 or y >= len(MAZE_WORLD) or x < 0 or x >= len(MAZE_WORLD[0]):
+        return "out"
+
+    value = MAZE_WORLD[y][x]
+    if value == "B":
+        return "blocked"
+    if value == "P":
+        return "pit"
+    if value == "W":
+        return "wumpus"
+    if value == "G":
+        return "goal"
+    return "safe"
+
+
+def _maze_adjacent_payload(x, y):
+    neighbors = [
+        {"dir": "up", "x": x, "y": y - 1, "state": _maze_cell_state(x, y - 1)},
+        {"dir": "down", "x": x, "y": y + 1, "state": _maze_cell_state(x, y + 1)},
+        {"dir": "left", "x": x - 1, "y": y, "state": _maze_cell_state(x - 1, y)},
+        {"dir": "right", "x": x + 1, "y": y, "state": _maze_cell_state(x + 1, y)},
+    ]
+
+    return {
+        "type": "maze_adjacent",
+        "origin": {"x": x, "y": y, "state": _maze_cell_state(x, y)},
+        "neighbors": neighbors,
+    }
 
 @app.route('/', methods=['GET'])
 def home():
@@ -319,6 +365,7 @@ def handle_encrypted_message():
         
         if plaintext == "command:exit_convo":
             session.conversation_active = False
+            session.maze_mode = False
             print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
         else:
             session.conversation_active = True
@@ -336,6 +383,29 @@ def handle_encrypted_message():
             "timestamp": timestamp,
             "sequence": sequence_number
         })
+
+        # Maze solver automation: helper replies with adjacency details automatically.
+        if plaintext == "maze_solver:start":
+            session.maze_mode = True
+            agent.send_encrypted_message(session_id, "maze_solver:ready")
+            print("[MAZE] Maze solver mode enabled for this session")
+        elif plaintext.startswith("maze_coord:") and session.maze_mode:
+            try:
+                coord_text = plaintext.split(":", 1)[1]
+                x_str, y_str = coord_text.split(",")
+                x = int(x_str.strip())
+                y = int(y_str.strip())
+
+                response_payload = _maze_adjacent_payload(x, y)
+                agent.send_encrypted_message(
+                    session_id,
+                    f"maze_adjacent:{json.dumps(response_payload, separators=(',', ':'))}"
+                )
+            except Exception as parse_error:
+                agent.send_encrypted_message(session_id, f"maze_error:{str(parse_error)}")
+        elif plaintext == "maze_solver:stop":
+            session.maze_mode = False
+            print("[MAZE] Maze solver mode disabled for this session")
         
         # Send acknowledgment
         return jsonify({
@@ -495,6 +565,7 @@ if __name__ == "__main__":
                     print(f"  Created: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(session.created_at))}")
                     print(f"  AES Key: {'Established' if session.aes_key else 'Pending'}")
                     print(f"  Conversation: {'Active' if session.conversation_active else 'Idle'}")
+                    print(f"  Maze Mode: {'Enabled' if session.maze_mode else 'Disabled'}")
                 print(f"{'='*60}\n")
         elif cmd == "request":
             if not agent.my_certificate:
