@@ -51,6 +51,7 @@ class SessionState:
         self.is_active = True
         self.conversation_active = False
         self.maze_mode = False
+        self.maze_position = None
         
         # Message queue for incoming messages (used by CLI)
         self.incoming_messages = []
@@ -106,6 +107,7 @@ class SessionState:
             f"has_aes_key={has_key}, "
             f"conversation_active={self.conversation_active}, "
             f"maze_mode={self.maze_mode}, "
+            f"maze_position={self.maze_position}, "
             f"send_seq={self.send_seq}, "
             f"recv_seq={self.recv_seq})"
         )

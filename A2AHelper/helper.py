@@ -366,6 +366,7 @@ def handle_encrypted_message():
         if plaintext == "command:exit_convo":
             session.conversation_active = False
             session.maze_mode = False
+            session.maze_position = None
             print(f"[MESSAGE] Conversation ended by {session.peer_agent_id}")
         else:
             session.conversation_active = True
@@ -387,7 +388,12 @@ def handle_encrypted_message():
         # Maze solver automation: helper replies with adjacency details automatically.
         if plaintext == "maze_solver:start":
             session.maze_mode = True
+            session.maze_position = (0, 0)
             agent.send_encrypted_message(session_id, "maze_solver:ready")
+            agent.send_encrypted_message(
+                session_id,
+                f"maze_adjacent:{json.dumps(_maze_adjacent_payload(0, 0), separators=(',', ':'))}"
+            )
             print("[MAZE] Maze solver mode enabled for this session")
         elif plaintext.startswith("maze_coord:") and session.maze_mode:
             try:
@@ -396,15 +402,43 @@ def handle_encrypted_message():
                 x = int(x_str.strip())
                 y = int(y_str.strip())
 
-                response_payload = _maze_adjacent_payload(x, y)
-                agent.send_encrypted_message(
-                    session_id,
-                    f"maze_adjacent:{json.dumps(response_payload, separators=(',', ':'))}"
-                )
+                if session.maze_position is None:
+                    session.maze_position = (0, 0)
+
+                target_state = _maze_cell_state(x, y)
+
+                if target_state in ["blocked", "out"]:
+                    cx, cy = session.maze_position
+                    response_payload = _maze_adjacent_payload(cx, cy)
+                    blocked_payload = {
+                        "reason": target_state,
+                        "attempted": {"x": x, "y": y},
+                        "current": {"x": cx, "y": cy},
+                        "adjacent": response_payload,
+                    }
+                    agent.send_encrypted_message(
+                        session_id,
+                        f"maze_move_blocked:{json.dumps(blocked_payload, separators=(',', ':'))}"
+                    )
+                elif target_state in ["pit", "wumpus"]:
+                    session.maze_position = (x, y)
+                    agent.send_encrypted_message(session_id, "AGENT DIED")
+                    agent.send_encrypted_message(session_id, "command:exit_convo")
+                    session.conversation_active = False
+                    session.maze_mode = False
+                    session.maze_position = None
+                else:
+                    session.maze_position = (x, y)
+                    response_payload = _maze_adjacent_payload(x, y)
+                    agent.send_encrypted_message(
+                        session_id,
+                        f"maze_adjacent:{json.dumps(response_payload, separators=(',', ':'))}"
+                    )
             except Exception as parse_error:
                 agent.send_encrypted_message(session_id, f"maze_error:{str(parse_error)}")
         elif plaintext == "maze_solver:stop":
             session.maze_mode = False
+            session.maze_position = None
             print("[MAZE] Maze solver mode disabled for this session")
         
         # Send acknowledgment
@@ -566,6 +600,7 @@ if __name__ == "__main__":
                     print(f"  AES Key: {'Established' if session.aes_key else 'Pending'}")
                     print(f"  Conversation: {'Active' if session.conversation_active else 'Idle'}")
                     print(f"  Maze Mode: {'Enabled' if session.maze_mode else 'Disabled'}")
+                    print(f"  Maze Position: {session.maze_position}")
                 print(f"{'='*60}\n")
         elif cmd == "request":
             if not agent.my_certificate:

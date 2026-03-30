@@ -103,7 +103,7 @@ class MazeVisualizer:
 
         self.ax.clear()
         self.ax.set_xlim(-0.5, self.width - 0.5)
-        self.ax.set_ylim(self.height - 0.5, -0.5)
+        self.ax.set_ylim(-0.5, self.height - 0.5)
         self.ax.set_xticks(range(self.width))
         self.ax.set_yticks(range(self.height))
         self.ax.grid(True, color="#cccccc", linewidth=0.6)
@@ -500,6 +500,23 @@ def handle_encrypted_message():
         if plaintext == "maze_solver:ready":
             session.maze_mode = True
             print("[MAZE] Helper is ready. Send coordinates using maze_solver mode.")
+        elif plaintext == "AGENT DIED":
+            print("[MAZE] AGENT DIED")
+            session.conversation_active = False
+            session.maze_mode = False
+            close_maze_visualizer()
+        elif plaintext.startswith("maze_move_blocked:"):
+            try:
+                payload_text = plaintext.split(":", 1)[1]
+                payload = json.loads(payload_text)
+                adjacent_payload = payload.get("adjacent", {})
+                maze_update_queue.put((session_id, adjacent_payload))
+
+                attempted = payload.get("attempted", {})
+                reason = payload.get("reason", "blocked")
+                print(f"[MAZE] Move rejected ({reason}) at ({attempted.get('x')}, {attempted.get('y')}). Position unchanged.")
+            except Exception as parse_error:
+                print(f"[MAZE] Failed to parse blocked-move payload: {parse_error}")
         elif plaintext.startswith("maze_adjacent:"):
             try:
                 payload_text = plaintext.split(":", 1)[1]
@@ -918,6 +935,7 @@ if __name__ == "__main__":
                 time.sleep(0.2)
                 process_pending_maze_updates(active_session_id=session_id)
 
+            close_maze_visualizer()
             print("[MAZE] Solver stopped. Session remains available.")
         elif cmd == "exit":
             close_maze_visualizer()
